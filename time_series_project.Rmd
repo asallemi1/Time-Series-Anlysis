@@ -1,0 +1,4411 @@
+---
+title: "Time Series Project"
+author: "Sallemi Alisia 866453"
+date: "09/06/2025"
+output:
+  word_document: default
+  html_document:
+    toc: true
+    df_print: paged
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
+---
+
+# Data Exploration and Preprocessing
+
+## Dataset 
+
+In this section i make a brief exploratory analysis of time serie.
+
+```{r}
+knitr::opts_chunk$set(message = FALSE)
+# Set workspace directory
+setwd("C:/Users/alisi/OneDrive/Desktop/timeserie/")
+
+# Load dataset
+data <- read.csv("ts2024.csv")
+
+# Visualize head of time serie
+head(data)
+```
+\
+Time serie has the following variables:
+
+- DateTime
+
+- Date 
+
+- Hour field
+
+- X which refers to the time series to predict
+\
+```{r}
+# Descriptive statistics summary
+require(skimr)
+skim_without_charts(data)
+```
+\
+Excluding time variables, the time series is approximately 95 per cent complete, indicating that there are missing data corresponding to **744 observations but regards the daily predictions** that we have to provide in the final part of project. The values of the series are **between 0 and 0.45** with a mean of 0.04631961 and a rather moderate standard deviation of 0.04894477. The 50th percentile is 0.0368 indicating that 50% of the series has values above this value. In addition, the 75th percentile, with a value of 0.0538, is also rather low compared to the highest value in the series. I expect to see the series remaining mostly below this value and reaching with several peaks the value of the maximum.
+\
+```{r}
+require(dplyr)
+data <- data %>%
+  mutate(
+    Hour = sprintf("%02d", Hour),
+    DateTime = paste(DateTime, paste0(Hour, ":00:00")),
+    DateTime = as.POSIXct(DateTime, format = "%Y-%m-%d %H:%M:%S"),
+    DateTime = format(DateTime, "%Y-%m-%d %H:%M:%S")  
+  )
+
+#write.csv(data, file_path, row.names = FALSE)
+head(data, 30)
+```
+
+
+```{r, warning=FALSE}
+library(xts)
+
+data$DateTime <- as.POSIXct(data$DateTime, by = "hour", 
+                            format="%Y-%m-%d %H:%M:%S")
+
+ts_data <- xts(data$X, order.by = data$DateTime)
+```
+\
+As I expected earlier from the percentiles, we have a time series where most values are below 0.05 approximately with several peaks throughout the time series which probably are outliers but i investigate further in the next chunks after NA investigation.
+\
+```{r}
+library(xts)
+library(forecast)
+
+data$DateTime <- as.POSIXct(data$DateTime, format="%Y-%m-%d %H:%M:%S")
+
+ts_data <- xts(data$X, order.by = data$DateTime)
+```
+\
+Here i create the eXtensible Time Serie object.
+\
+```{r}
+ts_cutted <- ts_data[1:16800]
+```
+\
+First of all we are taking into account the values provided without the "forecast" part.
+\
+```{r}
+plot(ts_cutted, col = "blue")
+```
+
+
+## Zero and NA values
+
+```{r}
+# Initialize counters
+count_na <- 0
+count_zero <- 0
+
+# Cycle the serie to investigate
+for (i in 1:length(ts_cutted)) {
+  if (is.na(ts_cutted[i])) {
+    count_na <- count_na + 1  # Conta i valori NA
+  } else if (ts_cutted[i] == 0) {
+    count_zero <- count_zero + 1  # Conta i valori zero
+  }
+}
+
+# Visualize results
+cat("Number of NA values:", count_na, "\n")
+cat("Number of zero values:", count_zero, "\n")
+```
+\
+Here i count the null or zeros values of time serie and there are 107 zeros.
+\
+```{r}
+zeros <- ts_cutted[ts_cutted == 0]
+
+dim(zeros)
+
+# Estrai le ore
+zeros_times <- as.POSIXct(index(zeros))
+zeros_hours <- as.numeric(format(zeros_times, "%H"))
+
+# Estrai i giorni
+zeros_days <- format(zeros_times, "%Y-%m-%d")
+
+# Conta le frequenze per ora
+table <- table(zeros_hours)
+table
+```
+```{r}
+# Visualizzazione con un barplot
+barplot(table,
+        main = "Zeros hourly distribution",
+        xlab = "Hour",
+        ylab = "Number of zeros",
+        col = "skyblue")
+
+```
+
+```{r}
+library(lubridate)
+days_of_week <- wday(ymd(zeros_days), label = TRUE, abbr = FALSE)
+table_days <- table(days_of_week)
+
+barplot(table_days,
+        main = "Zeros daily distribution",
+        xlab = "Week day",
+        ylab = "Number of zeros",
+        col = "skyblue")
+```
+\
+```{r}
+# Calculate median of time serie
+median_value <- median(ts_cutted, na.rm = TRUE)
+
+# Calculate the minimum value !=0 of the time serie
+min_value <- min(ts_cutted[ts_cutted !=0], na.rm = TRUE)
+```
+\
+Substituted every zero with the **manual imputation** of median relative to entire dataset.
+\
+```{r}
+# ts_cutted[ts_cutted == 0] <- NA
+# ts_cutted_filled <- ts_cutted
+# # Sostituzione manuale dei valori mancanti
+# for (i in 1:length(ts_cutted_filled)) {
+#   if (is.na(ts_cutted_filled[i])) {
+#     start <- max(1, i - 12)  # Imposta il range della finestra
+#     end <- min(length(ts_cutted_filled), i + 12)
+# #     ts_cutted_filled[i] <- round(median(ts_cutted_filled[start:end], na.rm = TRUE), 5)
+# #   }
+# # }
+#     window_values <- ts_cutted_filled[start:end]
+#     # Se tutti i valori nella finestra sono NA, usa la mediana globale
+#     if (all(is.na(window_values))) {
+#       ts_cutted_filled[i] <- round(median_value, 5)
+#     } else {
+#       ts_cutted_filled[i] <- round(median(window_values, na.rm = TRUE), 5)
+#     }
+#   }
+# }
+
+
+# Supponiamo che ts_cutted sia un oggetto zoo con indice temporale POSIXct
+# Estrai l'ora da ogni timestamp dell'indice zoo (ritorna valori tra 0 e 23)
+numeric_hours <- as.numeric(format(index(ts_cutted), "%H"))
+
+# Sostituisci gli zeri con NA
+ts_cutted[ts_cutted == 0] <- NA
+ts_cutted_filled <- ts_cutted
+
+# Calcola la mediana per ogni ora (escludendo NA)
+hourly_medians <- sapply(0:23, function(h) {
+  median(ts_cutted[numeric_hours == h], na.rm = TRUE)
+})
+
+# Imputa gli NA con la mediana dell'ora corrispondente
+for (i in 1:length(ts_cutted_filled)) {
+  if (is.na(ts_cutted_filled[i])) {
+    h <- numeric_hours[i]
+    ts_cutted_filled[i] <- round(hourly_medians[h + 1], 5)  # +1 per indicizzazione R
+  }
+}
+```
+\
+```{r}
+hourly_medians
+```
+
+Substituted every zeros with the **moving median** centered on the 24-hour window 
+(12 hours before and 12 hours after)
+\
+```{r}
+# Initialize counters
+count_na <- 0
+count_zero <- 0
+
+# Cycle the serie to investigate
+for (i in 1:length(ts_cutted_filled)) {
+  if (is.na(ts_cutted_filled[i])) {
+    count_na <- count_na + 1  # Conta i valori NA
+  } else if (ts_cutted_filled[i] == 0) {
+    count_zero <- count_zero + 1  # Conta i valori zero
+  }
+}
+
+# Visualize results
+cat("Number of NA values:", count_na, "\n")
+cat("Number of zero values:", count_zero, "\n")
+```
+\
+Check if there are any zeros or NA after preprocessing
+\
+```{r}
+plot(ts_cutted_filled, col = "blue")
+```
+\
+
+## Outliers
+
+```{r}
+hist(ts_cutted_filled, col = "skyblue", xlab = "X" )
+```
+\
+Probably the values belonging to the low frequency class are to be considered as outliers. It's reasonable to replace them with median. So, after determining a quantile i replace this values.
+\
+```{r}
+percentile_99 <- quantile(ts_cutted_filled, probs = 0.99)
+count_above_99th <- sum(ts_cutted_filled > percentile_99, na.rm = TRUE)
+count_above_99th
+```
+
+There are only 168 observations that are outliers which are very low in comparison with the whole number of instances in the dataset. Let's substitute them with median value previously calculated.
+\
+```{r}
+outliers <- ts_cutted_filled[ts_cutted_filled > percentile_99]
+
+dim(outliers)
+
+# Estrai le ore
+outlier_times <- as.POSIXct(index(outliers))
+outlier_hours <- as.numeric(format(outlier_times, "%H"))
+
+# Estrai i giorni
+outlier_days <- format(outlier_times, "%Y-%m-%d")
+
+# Conta le frequenze per ora
+table <- table(outlier_hours)
+table
+```
+\
+```{r}
+# Visualizzazione con un barplot
+barplot(table,
+        main = "Outliers hourly distribution",
+        xlab = "Hour",
+        ylab = "Number of outliers",
+        col = "skyblue")
+
+```
+\
+Although these values are plausible, reflecting higher traffic during the morning hours, they will be replaced with the median to help the models better learn the patterns without losing information.
+\
+```{r}
+library(lubridate)
+days_of_week <- wday(ymd(outlier_days), label = TRUE, abbr = FALSE)
+table_days <- table(days_of_week)
+
+barplot(table_days,
+        main = "Outliers daily distribution",
+        xlab = "Week day",
+        ylab = "Number of outliers",
+        col = "skyblue")
+```
+\
+```{r}
+median_value
+```
+\
+```{r}
+ts_cutted_filled[ts_cutted_filled > percentile_99] <- median_value
+plot(ts_cutted_filled, type = "l", col = "blue")
+```
+\
+Now the time serie it's very similar across the entire time space.
+\
+```{r}
+hist(ts_cutted_filled, col = "skyblue", xlab = "X")
+```
+\
+The histogram now reflect the new properties of the time serie.
+\
+```{r}
+head(ts_cutted_filled)
+```
+\
+```{r}
+file_path <- "C:/Users/alisi/OneDrive/Desktop/timeserie/ts_cutted_filled.csv"
+# Assumendo che ts_cutted_filled sia una serie temporale (ts o xts)
+# Converti la serie temporale in un data frame
+ts_cutted_filled_df <- data.frame(
+  Date = time(ts_cutted_filled),  # Ottieni le date
+  Value = as.numeric(ts_cutted_filled)  # Ottieni i valori numerici
+)
+
+# Salva il data frame in un file CSV
+write.csv(ts_cutted_filled_df, file_path, row.names = FALSE)
+```
+
+## Dataset preprocessed
+
+In this section i take datasets and divide it into 24 time series with daily data and then in training and test.
+\
+```{r}
+library(dplyr)
+knitr::opts_chunk$set(message = FALSE)
+# Set workspace directory
+setwd("C:/Users/alisi/OneDrive/Desktop/timeserie/")
+
+# Load datasets
+data <- read.csv("ts2024_preprocessed.csv")
+data_dummies <- read.csv("ts2024_dummies.csv")
+
+#data_dummies <- data_dummies %>% select(-Lag_X)
+data_dummies <- data_dummies
+```
+\
+```{r}
+dim(data)
+dim(data_dummies)
+```
+\
+
+## Dividing date in 24 time series
+
+Below i create a list containing 24 time series, one for a specific hour.
+\
+```{r}
+# Supponendo che il dataset abbia una colonna 'Hour' (da 0 a 23) e 'value' (la serie temporale)
+# Inizializzare una lista per contenere le 24 serie temporali
+hourly_series <- list()
+hourly_series_dummy <- list()
+
+# Ciclo per filtrare e salvare ogni serie oraria
+for (hour in 0:23) {
+  # Filtra i dati per l'ora specifica
+  hourly_series[[hour + 1]] <- data %>% filter(Hour == hour)
+  hourly_series_dummy[[hour + 1]] <- data_dummies %>% filter(Hour == hour)
+}
+
+# Visualizzare la serie per una specifica ora (ad esempio, per le 12)
+head(hourly_series[[13]])  # L'elemento 13 corrisponde alle 12:00 perche R indicizza da 1 e non 0
+```
+\
+```{r}
+nrow(hourly_series[[10]])
+nrow(hourly_series_dummy[[10]])
+```
+\
+```{r}
+plot(hourly_series[[9]]$X, type = "l", col="blue", ylab = "08:00 Hourly Serie")
+```
+\
+```{r}
+head(hourly_series[[9]])
+```
+
+
+## Box-Cox and check Stationarity for 24 time series
+
+Let's investigate the optimal values of lambda with Box-Cox transformation for each time serie.
+\
+```{r}
+# Carica la libreria forecast
+library(forecast)
+
+# Lista per salvare i valori di lambda ottimali
+optimal_lambdas <- numeric(24)
+
+# Ciclo per calcolare il lambda ottimale per ciascuna delle 24 serie orarie
+for (hour in 0:23) {
+  # Recupera la serie per l'ora 'hour' dalla lista 'hourly_series'
+  hour_data <- hourly_series[[hour + 1]]$X  # Assicurati che hourly_series contenga delle serie temporali
+  
+  # Verifica che 'hour_data' sia un vettore numerico e contiene solo valori positivi
+  if (is.numeric(hour_data) && all(hour_data > 0, na.rm = TRUE)) {
+    # Trova il lambda ottimale usando BoxCox.lambda
+    optimal_lambdas[hour + 1] <- BoxCox.lambda(hour_data)
+  } else {
+    optimal_lambdas[hour + 1] <- NA  # Se non è un vettore numerico o contiene valori <= 0, restituisce NA
+  }
+}
+
+# Visualizza i risultati
+print(optimal_lambdas)
+```
+\[
+\begin{array}{|c|c|}
+\hline
+\lambda & \text{Transformation} \\
+\hline
+-2 & \frac{1}{x^2} \\
+-1 & \frac{1}{x} \\
+-0.5 & \frac{1}{\sqrt{x}} \\
+0 & \log(x) \\
+0.5 & \sqrt{x} \\
+1 & x \\
+2 & x^2 \\
+\hline
+\end{array}
+\]
+
+\
+Below i test if the 24 time series are stationary or not.
+\
+```{r}
+library(forecast)
+library(tseries)  # Per il test ADF
+
+# Lista per salvare i risultati di stazionarietà
+stationarity_results <- data.frame(
+  Hour = 0:23, 
+  IsStationary = rep(NA, 24),
+  PValue = rep(NA, 24),
+  TauStatistic = rep(NA, 24),
+  CriticalValue5Pct = rep(NA, 24)
+)
+
+# Ciclo per verificare la stazionarietà di ciascuna serie
+for (hour in 0:23) {
+  # Recupera la serie per l'ora 'hour' dalla lista 'hourly_series'
+  hour_data <- hourly_series[[hour + 1]]$X  # Assicurati che hourly_series contenga delle serie temporali
+  
+  # Verifica che 'hour_data' sia un vettore numerico
+  if (is.numeric(hour_data)) {
+    # Applica la trasformazione di Box-Cox se il lambda ottimale è valido
+    lambda <- optimal_lambdas[hour + 1]
+    if (!is.na(lambda) && all(hour_data > 0, na.rm = TRUE)) {
+      transformed_data <- BoxCox(hour_data, lambda)
+    } else {
+      transformed_data <- hour_data  # Nessuna trasformazione se lambda non valido
+    }
+    
+    # Rimuovi eventuali NA prima del test
+    transformed_data <- na.omit(transformed_data)
+    
+    # Applica il test di Dickey-Fuller aumentato (ADF)
+    adf_test <- adf.test(transformed_data, alternative = "stationary")
+    
+    # Estrai il valore critico a livello del 5%
+    critical_values <- c(-3.43, -2.86, -2.57)  # Esempio: dipende dal numero di osservazioni (tau2 per trend e intercept)
+    tau_statistic <- adf_test$statistic
+    critical_value_5pct <- critical_values[2]  # Supponiamo il livello al 5%
+    
+    # Determina se la serie è stazionaria
+    is_stationary <- tau_statistic < critical_value_5pct
+    
+    # Salva i risultati
+    stationarity_results$IsStationary[hour + 1] <- is_stationary
+    stationarity_results$PValue[hour + 1] <- adf_test$p.value
+    stationarity_results$TauStatistic[hour + 1] <- tau_statistic
+    stationarity_results$CriticalValue5Pct[hour + 1] <- critical_value_5pct
+  } else {
+    # Se non è un vettore numerico, restituisci NA
+    stationarity_results$IsStationary[hour + 1] <- NA
+    stationarity_results$PValue[hour + 1] <- NA
+    stationarity_results$TauStatistic[hour + 1] <- NA
+    stationarity_results$CriticalValue5Pct[hour + 1] <- NA
+  }
+}
+
+# Visualizza i risultati
+print(stationarity_results)
+```
+
+\
+Every time series are stationary. 
+\
+Grafici acf e pacf dopo trasformazione box cox
+\
+```{r}
+pdf("acf_pacf_plots.pdf", width = 14, height = 10)
+
+# ACF plots
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))
+for (hour in 0:23) {
+  hour_data <- hourly_series[[hour + 1]]$X
+  if (is.numeric(hour_data)) {
+    lambda <- optimal_lambdas[hour + 1]
+    if (!is.na(lambda) && all(hour_data > 0, na.rm = TRUE)) {
+      transformed_data <- BoxCox(hour_data, lambda)
+    } else {
+      transformed_data <- hour_data
+    }
+    transformed_data <- na.omit(transformed_data)
+    acf(transformed_data, main = paste("ACF - Hour", hour))
+  }
+}
+
+# PACF plots
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))
+for (hour in 0:23) {
+  hour_data <- hourly_series[[hour + 1]]$X
+  if (is.numeric(hour_data)) {
+    lambda <- optimal_lambdas[hour + 1]
+    if (!is.na(lambda) && all(hour_data > 0, na.rm = TRUE)) {
+      transformed_data <- BoxCox(hour_data, lambda)
+    } else {
+      transformed_data <- hour_data
+    }
+    transformed_data <- na.omit(transformed_data)
+    pacf(transformed_data, main = paste("PACF - Hour", hour))
+  }
+}
+
+dev.off()
+```
+\
+Dai grafici notiamo come la maggior parte delle serie presenta una stagionalità settimanale e una tendenza verso 0 quindi stazionarietà, anche confermata dal test adf.
+Differenziazione settimanale e grafici acf e pacf
+\
+```{r}
+library(forecast)
+library(tseries)
+
+# Generazione dei grafici ACF
+pdf("acf_pacf_weekly_diff_plots.pdf", width = 14, height = 10)
+
+# Prima pagina: ACF dopo differenziazione stagionale
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # 4x6 = 24 grafici
+
+for (hour in 0:23) {
+  hour_data <- hourly_series[[hour + 1]]$X
+  
+  if (is.numeric(hour_data)) {
+    # Applica la trasformazione Box-Cox se possibile
+    lambda <- optimal_lambdas[hour + 1]
+    if (!is.na(lambda) && all(hour_data > 0, na.rm = TRUE)) {
+      transformed_data <- BoxCox(hour_data, lambda)
+    } else {
+      transformed_data <- hour_data
+    }
+
+    # Differenziazione stagionale settimanale (lag = 7)
+    seasonally_diff <- diff(na.omit(transformed_data), lag = 7)
+    
+    # Rimuovi eventuali NA e genera ACF
+    seasonally_diff <- na.omit(seasonally_diff)
+    acf(seasonally_diff, main = paste("ACF - Hour", hour))
+  }
+}
+
+# Seconda pagina: PACF dopo differenziazione stagionale
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))
+
+for (hour in 0:23) {
+  hour_data <- hourly_series[[hour + 1]]$X
+  
+  if (is.numeric(hour_data)) {
+    lambda <- optimal_lambdas[hour + 1]
+    if (!is.na(lambda) && all(hour_data > 0, na.rm = TRUE)) {
+      transformed_data <- BoxCox(hour_data, lambda)
+    } else {
+      transformed_data <- hour_data
+    }
+
+    seasonally_diff <- diff(na.omit(transformed_data), lag = 7)
+    
+    seasonally_diff <- na.omit(seasonally_diff)
+    pacf(seasonally_diff, main = paste("PACF - Hour", hour))
+  }
+}
+
+dev.off()
+```
+\
+
+## Dividing in Train and Test set
+
+Below i create 2 objects related to plain and dummies time serie. The objects contain 24 time series and, for each of them are generated 2 variables related to train set and test set. This are the structure related to final forecasts.
+\
+```{r}
+# Funzione per dividere i dati in train e test
+train_test_split <- function(hourly_series, train_end) {
+  train_set <- hourly_series[1:train_end, ]  # Da 1 a 'train_end' per il train
+  test_set <- hourly_series[(train_end+1):nrow(hourly_series), ]  # Rimanenti per il test
+  list(train = train_set, test = test_set)
+}
+
+# Impostiamo il valore di train_end
+train_end <- 700  # Gli ultimi 31 vanno nel test
+
+# Creare una lista per salvare i train e test per tutte le ore per i due dataset
+train_test_series <- list()
+train_test_series_dummy <- list()
+
+# Ciclo per creare i train e test per ogni ora (0 a 23) per entrambe le serie
+for (hour in 0:23) {
+  # Per hourly_series
+  hour_data <- hourly_series[[hour + 1]]
+  train_test_series[[hour + 1]] <- train_test_split(hour_data, train_end)
+  
+  # Per hourly_series_dummy
+  hour_data_dummy <- hourly_series_dummy[[hour + 1]]
+  train_test_series_dummy[[hour + 1]] <- train_test_split(hour_data_dummy, train_end)
+}
+
+# Verifica per le 12:00
+cat("Train set for 12:00 (original):\n")
+dim(train_test_series[[13]]$train)
+dim(train_test_series[[13]]$test)
+
+cat("Train set for 12:00 (dummy):\n")
+dim(train_test_series_dummy[[13]]$train)
+dim(train_test_series_dummy[[13]]$test)
+```
+\
+
+## Dividing in Train and Validation set
+
+```{r}
+# Funzione per dividere i dati in train e test
+train_test_split <- function(hourly_series, train_end) {
+  train_set <- hourly_series[1:train_end, ]  # Da 1 a 'train_end' per il train
+  test_set <- hourly_series[(train_end+1):700, ]  # Fino a 700 per il test
+  list(train = train_set, test = test_set)
+}
+
+# Impostiamo il valore di train_end
+train_end <- 630  # Gli ultimi 70 vanno nel test (da 631 a 700)
+
+# Creare una lista per salvare i train e test per tutte le ore per i due dataset
+train_val_series <- list()
+train_val_series_dummy <- list()
+
+# Ciclo per creare i train e test per ogni ora (0 a 23) per entrambe le serie
+for (hour in 0:23) {
+  # Per hourly_series
+  hour_data <- hourly_series[[hour + 1]]
+  train_val_series[[hour + 1]] <- train_test_split(hour_data, train_end)
+  
+  # Per hourly_series_dummy
+  hour_data_dummy <- hourly_series_dummy[[hour + 1]]
+  train_val_series_dummy[[hour + 1]] <- train_test_split(hour_data_dummy, train_end)
+}
+
+# Verifica per le 12:00
+cat("Train set for 12:00 (original):\n")
+dim(train_val_series[[13]]$train)
+dim(train_val_series[[13]]$test)
+
+cat("Train set for 12:00 (dummy):\n")
+dim(train_val_series_dummy[[13]]$train)
+dim(train_val_series_dummy[[13]]$test)
+```
+\
+```{r}
+tail(train_val_series[[1]]$train)
+```
+\
+```{r}
+head(train_val_series[[1]]$test)
+```
+\
+```{r}
+head(train_test_series[[1]]$test)
+```
+
+# ARIMA (Auto Regressive Integrated Moving Average)
+
+## Arima models (manual)
+
+## Univariate
+
+## Arima (3,1,1) (0,1,1)(7)
+
+The idea is to detect the overall behavior of the 24 time series and select the best parameters of Arima that achieve the lowest value of the mean of MAE.
+
+\
+```{r}
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+# Lista per memorizzare le previsioni
+forecasts_list <- list()
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 0
+  seasonal_d <- 1
+  seasonal_q <- 1
+  m <- 7   # Periodo stagionale orario
+  
+  # Costruisci il modello ARIMA manualmente
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = lambda)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X))
+  
+  # Salva le previsioni in forecasts_list
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X))
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## Arima (3,1,1) (0,1,2)(7)
+
+```{r}
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 0
+  seasonal_d <- 1
+  seasonal_q <- 2
+  m <- 7   # Periodo stagionale orario
+  
+  # Costruisci il modello ARIMA manualmente
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = lambda)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X))
+  
+  # Salva le previsioni in forecasts_list
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X))
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+There is still one lag significant lag. I take another attempt.
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## Arima (3,1,1) (1,1,1)(7)
+
+```{r}
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 1
+  seasonal_d <- 1
+  seasonal_q <- 1
+  m <- 7   # Periodo stagionale orario
+  
+  # Costruisci il modello ARIMA manualmente
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = lambda)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X))
+  
+  # Salva le previsioni in forecasts_list
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X))
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## Dummies
+
+## Arima (3,1,1) (0,1,1)(7) with dummies
+
+```{r}
+# Liste per memorizzare i MAE e i residui
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+xreg_columns <- c("Dec24", "Dec25", "Dec26", "Jan1", "Jan6", 
+                  "EasterSat", "Easter", "EasterMon", 
+                  "EasterTue", "Aug15", "EndYear", "Valentine")
+
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Estrai i dati di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni le variabili dummy (xreg) per training e test set
+  train_xreg <- as.matrix(train_series[, xreg_columns, drop = FALSE])
+  test_xreg <- as.matrix(test_series[, xreg_columns, drop = FALSE])
+  
+  # Converti le variabili in numerico
+  train_xreg <- apply(train_xreg, 2, as.numeric)
+  test_xreg <- apply(test_xreg, 2, as.numeric)
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 0
+  seasonal_d <- 1
+  seasonal_q <- 1
+  m <- 7   # Periodo stagionale
+  
+  # Costruisci il modello ARIMA manualmente con regressori esterni
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = optimal_lambdas[i],
+                 xreg = train_xreg)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X), xreg = test_xreg)
+  
+  #Salva previsioni
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X), na.rm = TRUE)
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## Arima (3,1,1) (0,1,2)(7) with dummies
+
+```{r}
+# Liste per memorizzare i MAE e i residui
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+xreg_columns <- c("Dec24", "Dec25", "Dec26", "Jan1", "Jan6", 
+                  "EasterSat", "Easter", "EasterMon", 
+                  "EasterTue", "Aug15", "EndYear", "Valentine")
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Estrai i dati di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni le variabili dummy (xreg) per training e test set
+  train_xreg <- as.matrix(train_series[, xreg_columns, drop = FALSE])
+  test_xreg <- as.matrix(test_series[, xreg_columns, drop = FALSE])
+  
+  # Converti le variabili in numerico
+  train_xreg <- apply(train_xreg, 2, as.numeric)
+  test_xreg <- apply(test_xreg, 2, as.numeric)
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 0
+  seasonal_d <- 1
+  seasonal_q <- 2
+  m <- 7   # Periodo stagionale
+  
+  # Costruisci il modello ARIMA manualmente con regressori esterni
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = optimal_lambdas[i],
+                 xreg = train_xreg)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X), xreg = test_xreg)
+  
+  # Salva previsioni
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X), na.rm = TRUE)
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+
+## Arima (3,1,1) (1,1,1)(7) with dummies
+
+```{r}
+# Liste per memorizzare i MAE e i residui
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+xreg_columns <- c("Dec24", "Dec25", "Dec26", "Jan1", "Jan6", 
+                  "EasterSat", "Easter", "EasterMon", 
+                  "EasterTue", "Aug15", "EndYear", "Valentine")
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Estrai i dati di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni le variabili dummy (xreg) per training e test set
+  train_xreg <- as.matrix(train_series[, xreg_columns, drop = FALSE])
+  test_xreg <- as.matrix(test_series[, xreg_columns, drop = FALSE])
+  
+  # Converti le variabili in numerico
+  train_xreg <- apply(train_xreg, 2, as.numeric)
+  test_xreg <- apply(test_xreg, 2, as.numeric)
+  
+  # Specifica i parametri ARIMA manualmente
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 1
+  seasonal_d <- 1
+  seasonal_q <- 1
+  m <- 7   # Periodo stagionale
+  
+  # Costruisci il modello ARIMA manualmente con regressori esterni
+  model <- Arima(train_series$X, 
+                 order = c(p, d, q), 
+                 seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+                 lambda = optimal_lambdas[i],
+                 xreg = train_xreg)
+  
+  # Fai una previsione sul test set
+  forecast_values <- forecast(model, h = length(test_series$X), xreg = test_xreg)
+  
+  # Salva previsioni
+  forecasts_list[[i]] <- forecast_values$mean
+  
+  # Calcola l'errore assoluto medio (MAE)
+  mae_values[i] <- mean(abs(forecast_values$mean - test_series$X), na.rm = TRUE)
+  
+  # Salva i residui del modello
+  residuals_list[[i]] <- residuals(model)
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecasts_list)
+series_length <- length(forecasts_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecasts_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+
+## Deployment final model
+
+```{r}
+# Inizializza una lista per salvare le previsioni per ciascuna serie temporale
+forecast_results_ARIMA <- vector("list", 24)
+
+# Colonne dei regressori (dummy)
+xreg_columns <- c("Dec24", "Dec25", "Dec26", "Jan1", "Jan6", 
+                  "EasterSat", "Easter", "EasterMon", 
+                  "EasterTue", "Aug15", "EndYear", "Valentine")
+
+# Loop su tutte le serie temporali
+for (i in 1:24) {
+  print(i)
+  # Estrai train e test per la serie corrente
+  train_series <- train_test_series_dummy[[i]]$train
+  test_series <- train_test_series_dummy[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie
+  lambda <- optimal_lambdas[i]
+  
+  # Estrai i regressori (dummy) per training e test set
+  train_xreg <- as.matrix(train_series[, xreg_columns, drop = FALSE])
+  test_xreg <- as.matrix(test_series[, xreg_columns, drop = FALSE])
+  
+  # Converti le variabili in numerico
+  train_xreg <- apply(train_xreg, 2, as.numeric)
+  test_xreg <- apply(test_xreg, 2, as.numeric)
+  
+  # Specifica i parametri ARIMA
+  p <- 3    # Ordine autoregressivo
+  d <- 1    # Ordine di differenziazione
+  q <- 1    # Ordine media mobile
+  
+  # Parametri stagionali
+  seasonal_p <- 0
+  seasonal_d <- 1
+  seasonal_q <- 1
+  m <- 7  # Periodo settimanale
+  
+  # Costruisci il modello ARIMA con regressori esterni
+  model <- tryCatch({
+    Arima(train_series$X, 
+          order = c(p, d, q), 
+          seasonal = list(order = c(seasonal_p, seasonal_d, seasonal_q), period = m),
+          lambda = lambda,
+          xreg = train_xreg)
+  }, error = function(e) {
+    cat(sprintf("Errore nella serie %d: %s\n", i, e$message))
+    NULL
+  })
+  
+  # Verifica se il modello è stato creato con successo
+  if (!is.null(model)) {
+    # Fai una previsione sul test set con regressori esterni
+    forecast_values <- tryCatch({
+      forecast(model, h = length(test_series$DateTime), xreg = test_xreg)
+    }, error = function(e) {
+      cat(sprintf("Errore nella previsione per la serie %d: %s\n", 1, e$message))
+      NULL
+    })
+    
+    # Salva le previsioni nella lista
+    if (!is.null(forecast_values)) {
+      forecast_results_ARIMA[[i]] <- as.numeric(forecast_values$mean)
+    } else {
+      forecast_results_ARIMA[[i]] <- NULL
+    }
+  } else {
+    # Se il modello non è stato creato, salva NULL
+    forecast_results_ARIMA[[i]] <- NULL
+  }
+}
+
+# Stampa un riepilogo delle previsioni
+cat("Previsioni completate per le 24 serie temporali.\n")
+```
+\
+```{r}
+forecast_results_ARIMA[[1]]
+```
+\
+```{r}
+forecast_results_ARIMA[[2]]
+```
+\
+```{r}
+forecast_results_ARIMA[[3]]
+```
+\
+```{r}
+# Creazione della base DateTime
+start_date <- as.POSIXct("2016-12-01 00:00:00")
+num_days <- length(forecast_results_ARIMA[[1]])  # Numero di giorni previsti
+hourly_series_length <- num_days * 24  # Numero totale di ore
+
+# Genera il vettore DateTime per ogni ora
+datetime_vector <- seq(start_date, by = "hour", length.out = hourly_series_length)
+
+# Inizializza un vettore per salvare tutte le previsioni
+forecast_vector_ARIMA <- numeric(hourly_series_length)
+
+# Ricomponi la serie oraria
+for (i in 1:24) {
+  # Inserisci le previsioni nella posizione corretta
+  forecast_vector_ARIMA[seq(i, hourly_series_length, by = 24)] <- forecast_results_ARIMA[[i]]
+}
+
+# Creazione del data frame finale
+forecast_dataframe <- data.frame(
+  DateTime = datetime_vector,
+  ARIMA = forecast_vector_ARIMA
+)
+
+# Visualizza le prime righe del risultato
+head(forecast_dataframe)
+```
+\
+```{r}
+dim(forecast_dataframe)
+```
+\
+```{r}
+library(ggplot2)
+
+# Filtra la serie originale per sovrapporre solo fino all'ultima osservazione reale
+ts_train_df <- subset(ts_cutted_filled_df, Date < as.POSIXct("2016-12-01 00:00:00"))
+
+# Combina i dati di training e le previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$ARIMA
+)
+
+# Plot con ggplot2
+ggplot() +
+  # Serie originale (parte di training)
+  geom_line(data = ts_train_df, aes(x = Date, y = Value), color = "skyblue", size = 0.8, alpha = 0.7) +
+  # Previsioni
+  geom_line(data = forecast_df, aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Serie Originale vs Previsioni",
+       x = "DateTime", y = "Valore") +
+  theme_minimal()
+```
+\
+```{r}
+library(ggplot2)
+
+# Combina i dati delle previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$ARIMA
+)
+
+# Plot con ggplot2: solo previsioni
+ggplot(data = forecast_df) +
+  # Previsioni
+  geom_line(aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Previsioni con ARIMA",
+       x = "DateTime", y = "Valore Previsione") +
+  theme_minimal()
+```
+
+# Unobserved Components Models (UCM)
+
+```{r}
+library(xts)
+library(ggplot2)
+library(lubridate)
+library(forecast)
+#install.packages("fastDummies")
+library(fastDummies)
+library(Metrics)
+library("KFAS")
+library(KFAS)
+hour <- 17
+```
+
+## Univariate
+
+## LLT, seasonal dummy (7)
+
+```{r}
+# Modello a: LLT e stagionalità dummy a periodo di 7 giorni
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità dummy con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "dummy"),   # Stagionalità settimanale (periodo = 7)
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, n.ahead = length(test_series$X), interval = "none")
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## LLT, trigometric seasonality (7)
+
+```{r}
+# Modello b: LLT e stagionalità trigonometrica di periodo 7
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "trig"),  # Stagionalità trigonometrica settimanale (periodo = 7)
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, n.ahead = length(test_series$X), interval = "none")
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## LLT, seasonal dummy (7) and one trigonometric harmonic (365)
+
+```{r}
+# Modello c: LLT e seasonal dummy (7) and 1 trigonometric harmonic (365)
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                     SSMseasonal(365, NA, "trig", harmonics = 1), # Stagionalità di periodo 365
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, n.ahead = length(test_series$X), interval = "none")
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## LLT, seasonal dummy (7) and 2 harmonics (365)
+
+```{r}
+# Modello b: LLT e stagionalità trigonometrica di periodo 7
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                     SSMseasonal(365, NA, "trig", harmonics=1:2), # Stagionalità di periodo 365 con 5 armoniche
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, n.ahead = length(test_series$X), interval = "none")
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## LLT, seasonal dummy (7) and 3 harmonics (365)
+
+```{r}
+# Modello b: LLT e stagionalità trigonometrica di periodo 7
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                     SSMseasonal(365, NA, "trig", harmonics=1:3), # Stagionalità di periodo 365 con 5 armoniche
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, n.ahead = length(test_series$X), interval = "none")
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## Dummies
+
+## LLT, seasonal dummy (7) with dummies
+
+```{r}
+xreg_columns <- c("Dec24", "Dec25", "Dec26", "Jan1", "Jan6", 
+                  "EasterSat", "Easter", "EasterMon", 
+                  "EasterTue", "Aug15", "EndYear", "Valentine")
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Estrai le variabili dummy dal train set
+  train_xreg <- train_series[, xreg_columns, drop = FALSE]
+  test_xreg <- test_series[, xreg_columns, drop = FALSE]
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica di periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                   SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                   SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = train_series,                    # Variabili esogene (dummy) nel modello
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità settimanale
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  na_per_pred <- c(rep(NA, 70))
+  empty <- SSModel(na_per_pred ~ SSMtrend(2, list(fit_mod$model$Q[1,1,1], fit_mod$model$Q[2,2,1])) + 
+                     SSMseasonal(7, fit_mod$model$Q[3,3,1], "dummy") + 
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = test_series,
+                   H = fit_mod$model$H)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, newdata = empty)
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## LLT, trigometric seasonality (7) with dummies
+
+```{r}
+# Modello b: LLT e stagionalità trigonometrica di periodo 7
+
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica con periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                     SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                     SSMseasonal(7, NA, "trig") +
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = train_series,                    # Variabili esogene (dummy) nel modello
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità giornaliera
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  na_per_pred <- c(rep(NA, 70))
+  empty <- SSModel(na_per_pred ~ SSMtrend(2, list(fit_mod$model$Q[1,1,1], fit_mod$model$Q[2,2,1])) + 
+                     SSMseasonal(7, fit_mod$model$Q[3,3,1], "trig") + 
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = test_series,
+                   H = fit_mod$model$H)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, newdata = empty)
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## LLT, seasonal dummy (7) and 2 harmonics (365) with dummies
+
+```{r}
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_values_list <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  # Estrai le variabili dummy dal train set
+  train_xreg <- train_series[, xreg_columns, drop = FALSE]
+  test_xreg <- test_series[, xreg_columns, drop = FALSE]
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica di periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                   SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                   SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                   SSMseasonal(365, NA, "trig", harmonics=1:2) + # Stagionalità di periodo 365 con 5 armoniche
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = train_series,                    # Variabili esogene (dummy) nel modello
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità settimanale
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  na_per_pred <- c(rep(NA, 70))
+  empty <- SSModel(na_per_pred ~ SSMtrend(2, list(fit_mod$model$Q[1,1,1], fit_mod$model$Q[2,2,1])) + 
+                     SSMseasonal(7, fit_mod$model$Q[3,3,1], "dummy") + 
+                     SSMseasonal(365, fit_mod$model$Q[4,4,1], "trig", harmonics=1:2) + 
+                   `Dec24` + `Dec25` + `Dec26` + `Jan1` + `Jan6` + 
+                   `EasterSat` + `Easter` + `EasterMon` + `EasterTue` + 
+                   `Aug15` + `EndYear` + `Valentine`,
+                   data = test_series,
+                   H = fit_mod$model$H)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, newdata = empty)
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+  
+  
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+print(fit_mod$optim.out$convergence==0)
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## Deployment final model
+
+```{r}
+# Lista per memorizzare i MAE
+mae_values <- numeric(length = 24)
+residuals_list <- list()
+
+test_values_list <- list()  # Lista per memorizzare i valori di training
+forecast_results_UCM <- list()  # Lista per memorizzare i valori di forecast
+
+# Loop per ogni serie temporale
+for (i in 1:24) {
+  print(i)
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_test_series_dummy[[i]]$train
+  test_series <- train_test_series_dummy[[i]]$test
+  
+  # Ottieni il valore di lambda per questa serie ed applicala (da optimal_lambdas)
+  lambda <- optimal_lambdas[i]
+  train_series_boxcox <- BoxCox(train_series$X, lambda)
+  
+  
+  # Costruisci il modello UCM: trend locale lineare (LLT) + stagionalità trigonometrica di periodo 7
+  model <- SSModel(train_series_boxcox ~ 
+                   SSMtrend(2, list(NA, NA)) +    # LLTrend di ordine 2 con varianze iniziali sconosciute
+                   SSMseasonal(7, NA, "dummy") +  # # Stagionalità settimanale (periodo = 7)
+                   SSMseasonal(365, NA, "trig", harmonics=1:2),  # Stagionalità di periodo 365 con 5 armoniche
+                   H = NA)                         # Varianza del rumore di misura
+  
+  # Inizializza i valori basati sulla varianza della serie di training
+  ts_var <- var(train_series_boxcox, na.rm = TRUE) 
+  inits <- log(c(
+    ts_var / 100,    # Varianza del trend lento
+    ts_var / 1000,   # Varianza del trend veloce
+    ts_var / 10,     # Varianza della stagionalità settimanale
+    ts_var / 1000    # Varianza degli errori di misura
+  ))
+  
+  updt <- function(pars, model) {
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  diag(model$Q[-(1:2), -(1:2), 1]) <- exp(pars[3])
+  model$H[1, 1, 1] <- exp(pars[4])
+  model
+  }
+  
+  # Adattamento del modello
+  fit_mod <- fitSSM(model, inits = inits, updatefn = updt, method = "BFGS")
+  
+  # Esecuzione del filtro di Kalman per stimare lo stato latente
+  kfs <- KFS(fit_mod$model)
+  
+  na_per_pred <- c(rep(NA, 31))
+  empty <- SSModel(na_per_pred ~ SSMtrend(2, list(fit_mod$model$Q[1,1,1], 
+                                                  fit_mod$model$Q[2,2,1])) + 
+                     SSMseasonal(7, fit_mod$model$Q[3,3,1], "dummy") + 
+                     SSMseasonal(365, fit_mod$model$Q[4,4,1], "trig", harmonics=1:2), 
+                   H = fit_mod$model$H)
+  
+  # Estrai le previsioni sulla scala Box-Cox
+  pred_boxcox <- predict(fit_mod$model, newdata = empty)
+  
+  # Converti le previsioni sulla scala originale usando InvBoxCox
+  pred_original <- InvBoxCox(pred_boxcox, lambda)
+  
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_results_UCM[[i]] <- pred_original  # Salva le previsioni
+  
+  # Calcola il MAE confrontando le previsioni con i valori reali
+  mae_values[i] <- mean(abs(pred_original - test_series$X))
+  
+  # Salva i residui (scala originale) nella lista
+  residuals_list[[i]] <- test_series$X - pred_original
+  
+  
+}
+
+# Stampa un riepilogo delle previsioni
+cat("Previsioni completate per le 24 serie temporali.\n")
+```
+\
+```{r}
+forecast_results_UCM[[1]][1:4]
+```
+\
+```{r}
+forecast_results_UCM[[2]][1:4]
+```
+\
+```{r}
+forecast_results_UCM[[3]][1:4]
+```
+\
+```{r}
+# Creazione della base DateTime
+start_date <- as.POSIXct("2016-12-01 00:00:00")
+num_days <- length(forecast_results_UCM[[1]])  # Numero di giorni previsti
+hourly_series_length <- num_days * 24  # Numero totale di ore
+
+# Genera il vettore DateTime per ogni ora
+datetime_vector <- seq(start_date, by = "hour", length.out = hourly_series_length)
+
+# Inizializza un vettore per salvare tutte le previsioni
+forecast_vector_UCM <- numeric(hourly_series_length)
+
+# Ricomponi la serie oraria
+for (i in 1:24) {
+  # Inserisci le previsioni nella posizione corretta
+  forecast_vector_UCM[seq(i, hourly_series_length, by = 24)] <- forecast_results_UCM[[i]]
+}
+
+# Creazione del data frame finale
+forecast_dataframe <- data.frame(
+  DateTime = datetime_vector,
+  ARIMA = forecast_vector_ARIMA,
+  UCM = forecast_vector_UCM
+)
+
+# Visualizza le prime righe del risultato
+head(forecast_dataframe)
+```
+\
+```{r}
+dim(forecast_dataframe)
+```
+\
+```{r}
+library(ggplot2)
+
+# Filtra la serie originale per sovrapporre solo fino all'ultima osservazione reale
+ts_train_df <- subset(ts_cutted_filled_df, Date < as.POSIXct("2016-12-01 00:00:00"))
+
+# Combina i dati di training e le previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$UCM
+)
+
+# Plot con ggplot2
+ggplot() +
+  # Serie originale (parte di training)
+  geom_line(data = ts_train_df, aes(x = Date, y = Value), color = "skyblue", size = 0.8, alpha = 0.7) +
+  # Previsioni
+  geom_line(data = forecast_df, aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Serie Originale vs Previsioni",
+       x = "DateTime", y = "Valore") +
+  theme_minimal()
+```
+\
+```{r}
+library(ggplot2)
+
+# Combina i dati delle previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$UCM
+)
+
+# Plot con ggplot2: solo previsioni
+ggplot(data = forecast_df) +
+  # Previsioni
+  geom_line(aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Previsioni con UCM",
+       x = "DateTime", y = "Valore Previsione") +
+  theme_minimal()
+```
+\
+```{r}
+# Specifica il percorso e il nome del file CSV
+file_path <- "forecast_dataframe.csv"
+
+# Salva il data frame come CSV
+write.csv(forecast_dataframe, file = file_path, row.names = FALSE)
+
+# Conferma il salvataggio
+cat("Il file è stato salvato in:", file_path, "\n")
+```
+
+# Machine Learning (ML)
+
+```{r}
+#Crea un dataframe perlaserie temporale di allenamento
+ train_data<-data.frame(
+   Date= train_series$Date,
+   Value= train_series$X,
+   Type = "Train"
+ )
+
+ # Crea un data frame per la serie temporale di test
+ test_data <- data.frame(
+   Date = test_series$Date,
+   Value = test_series$X,
+   Type = "Test"
+ )
+ 
+ # Crea un data frame per le previsioni
+ forecast_data <- data.frame(
+   Date = test_series$Date, # Usa gli stessi indici di test_series per la previsione
+   Value = forecast_values$mean,
+   Type = "Forecast"
+ )
+ 
+ # Assicurati che la colonna Date sia nello stesso formato per tutti i data frame
+ train_data$Date <- as.Date(train_data$Date)
+ test_data$Date <- as.Date(test_data$Date)
+ forecast_data$Date <- as.Date(forecast_data$Date)
+```
+
+
+## Preprocessing (division dataset and box cox transformation)
+
+```{r}
+# Carica i dati
+data_dummies <- read.csv("ts2024_dummiesML.csv")
+
+# Assumiamo che i dataset abbiano una colonna "DateTime" e che le date siano stringhe
+data_dummies$DateTime <- as.POSIXct(data_dummies$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# Definizione dei limiti temporali
+validation_start <- as.POSIXct("2016-09-22 00:00:00")
+test_start <- as.POSIXct("2016-12-01 00:00:00")
+
+# Imputazione della mediana per Lag_X
+data_dummies$Lag_X[is.na(train_data$Lag_X)] <- median(train_data$Lag_X, na.rm = TRUE)
+
+# Imputazione della mediana per Lag_X7
+data_dummies$Lag_X7[is.na(train_data$Lag_X7)] <- median(train_data$Lag_X7, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X
+data_dummies$Diff_X[is.na(train_data$Diff_X)] <- median(train_data$Diff_X, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X7
+data_dummies$Diff_X7[is.na(train_data$Diff_X7)] <- median(train_data$Diff_X7, na.rm = TRUE)
+```
+\
+```{r}
+# Imputazione della mediana per Lag_X
+data_dummies$Lag_X[is.na(train_data$Lag_X)] <- median(train_data$Lag_X, na.rm = TRUE)
+
+# Imputazione della mediana per Lag_X7
+data_dummies$Lag_X7[is.na(train_data$Lag_X7)] <- median(train_data$Lag_X7, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X
+data_dummies$Diff_X[is.na(train_data$Diff_X)] <- median(train_data$Diff_X, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X7
+data_dummies$Diff_X7[is.na(train_data$Diff_X7)] <- median(train_data$Diff_X7, na.rm = TRUE)
+
+# Divisione del dataset con dummy
+train_data_dummies <- subset(data_dummies, DateTime < validation_start)
+validation_data_dummies <- subset(data_dummies, DateTime >= 
+                                    validation_start & DateTime < test_start)
+test_data_dummies <- subset(data_dummies, DateTime >= test_start)
+
+# Selezione delle colonne rilevanti
+selected_columns <- c("DateTime", "Date", "Hour", "X", "Lag_X", "Lag_X7", "Diff_X", "Diff_X7", "DayOfWeek", "DayOfYear")
+#selected_columns <- c("DateTime", "Date", "Hour", "X", "Lag_X")
+
+# Filtra le colonne nei dataset di training, validation e test
+train_data <- train_data_dummies[, selected_columns, drop = FALSE]
+validation_data <- validation_data_dummies[, selected_columns, drop = FALSE]
+test_data <- test_data_dummies[, selected_columns, drop = FALSE]
+
+
+# Verifica delle dimensioni
+cat("Dimensioni dataset originale:\n")
+cat("Train: ", nrow(train_data), "\n")
+cat("Validation: ", nrow(validation_data), "\n")
+cat("Test: ", nrow(test_data), "\n")
+
+cat("\nDimensioni dataset con dummy:\n")
+cat("Train: ", nrow(train_data_dummies), "\n")
+cat("Validation: ", nrow(validation_data_dummies), "\n")
+cat("Test: ", nrow(test_data_dummies), "\n")
+```
+
+\
+```{r}
+# Converti i dataframe in oggetti xts
+train_xts <- xts(train_data[ , -1], order.by = train_data$DateTime)
+validation_xts <- xts(validation_data[ , -1], order.by = validation_data$DateTime)
+test_xts <- xts(test_data[ , -1], order.by = test_data$DateTime)
+
+train_xts_dummies <- xts(train_data_dummies[ , -1], order.by = train_data_dummies$DateTime)
+validation_xts_dummies <- xts(validation_data_dummies[ , -1], order.by = validation_data_dummies$DateTime)
+test_xts_dummies <- xts(test_data_dummies[ , -1], order.by = test_data_dummies$DateTime)
+```
+\
+
+
+```{r}
+head(train_data)
+```
+\
+```{r} 
+head(train_data_dummies)
+```
+\
+```{r}
+set.seed(213654897)
+library(randomForest)
+library(xts)
+library(ggplot2)
+library(lubridate)
+library(forecast)
+#install.packages("fastDummies")
+library(fastDummies)
+library(Metrics)
+library("KFAS")
+#install.packages("randomForest")
+library(randomForest)
+#install.packages("xgboost")
+library(xgboost)
+```
+\
+```{r}
+# Carica i dati
+data <- read.csv("ts2024_dummiesML.csv")
+
+# Assumiamo che i dataset abbiano una colonna "DateTime" e che le date siano stringhe
+data$DateTime <- as.POSIXct(data$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# Definizione dei limiti temporali
+validation_start <- as.POSIXct("2016-09-22 00:00:00")
+test_start <- as.POSIXct("2016-12-01 00:00:00")
+
+# Imputazione della mediana per Lag_X
+data$Lag_X[is.na(train_data$Lag_X)] <- median(train_data$Lag_X, na.rm = TRUE)
+
+# Imputazione della mediana per Lag_X7
+data$Lag_X7[is.na(train_data$Lag_X7)] <- median(train_data$Lag_X7, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X
+data$Diff_X[is.na(train_data$Diff_X)] <- median(train_data$Diff_X, na.rm = TRUE)
+
+# Imputazione della mediana per Diff_X7
+data$Diff_X7[is.na(train_data$Diff_X7)] <- median(train_data$Diff_X7, na.rm = TRUE)
+```
+\
+```{r}
+# Supponendo che il dataset abbia una colonna 'Hour' (da 0 a 23) e 'value' (la serie temporale)
+# Inizializzare una lista per contenere le 24 serie temporali
+selected_columns <- c("DateTime", "Date", "Hour", "X", "Lag_X", "Lag_X7", "Diff_X", "Diff_X7", "DayOfWeek", "DayOfYear")
+hourly_series <- list()
+hourly_series_dummy <- list()
+
+# Ciclo per filtrare e salvare ogni serie oraria
+for (hour in 0:23) {
+  # Filtra i dati per l'ora specifica
+  hourly_series[[hour + 1]] <- data[, selected_columns, drop = FALSE] %>% 
+    filter(Hour == hour)
+  hourly_series_dummy[[hour + 1]] <- data %>% filter(Hour == hour)
+}
+
+# Visualizzare la serie per una specifica ora (ad esempio, per le 12)
+head(hourly_series[[13]])  # L'elemento 13 corrisponde alle 12:00 perche R indicizza da 1 e non 0
+```
+\
+```{r}
+# Funzione per dividere i dati in train e test
+train_test_split <- function(hourly_series, train_end) {
+  train_set <- hourly_series[1:train_end, ]  # Da 1 a 'train_end' per il train
+  test_set <- hourly_series[(train_end+1):nrow(hourly_series), ]  # Rimanenti per il test
+  list(train = train_set, test = test_set)
+}
+
+# Impostiamo il valore di train_end
+train_end <- 700  # Gli ultimi 31 vanno nel test
+
+# Creare una lista per salvare i train e test per tutte le ore per i due dataset
+train_test_series <- list()
+train_test_series_dummy <- list()
+
+# Ciclo per creare i train e test per ogni ora (0 a 23) per entrambe le serie
+for (hour in 0:23) {
+  # Per hourly_series
+  hour_data <- hourly_series[[hour + 1]]
+  train_test_series[[hour + 1]] <- train_test_split(hour_data, train_end)
+  
+  # Per hourly_series_dummy
+  hour_data_dummy <- hourly_series_dummy[[hour + 1]]
+  train_test_series_dummy[[hour + 1]] <- train_test_split(hour_data_dummy, train_end)
+}
+
+# Verifica per le 12:00
+cat("Train set for 12:00 (original):\n")
+dim(train_test_series[[13]]$train)
+dim(train_test_series[[13]]$test)
+
+cat("Train set for 12:00 (dummy):\n")
+dim(train_test_series_dummy[[13]]$train)
+dim(train_test_series_dummy[[13]]$test)
+```
+\
+```{r}
+# Funzione per dividere i dati in train e test
+train_test_split <- function(hourly_series, train_end) {
+  train_set <- hourly_series[1:train_end, ]  # Da 1 a 'train_end' per il train
+  test_set <- hourly_series[(train_end+1):700, ]  # Fino a 700 per il test
+  list(train = train_set, test = test_set)
+}
+
+# Impostiamo il valore di train_end
+train_end <- 630  # Gli ultimi 70 vanno nel test (da 631 a 700)
+
+# Creare una lista per salvare i train e test per tutte le ore per i due dataset
+train_val_series <- list()
+train_val_series_dummy <- list()
+
+# Ciclo per creare i train e test per ogni ora (0 a 23) per entrambe le serie
+for (hour in 0:23) {
+  # Per hourly_series
+  hour_data <- hourly_series[[hour + 1]]
+  train_val_series[[hour + 1]] <- train_test_split(hour_data, train_end)
+  
+  # Per hourly_series_dummy
+  hour_data_dummy <- hourly_series_dummy[[hour + 1]]
+  train_val_series_dummy[[hour + 1]] <- train_test_split(hour_data_dummy, train_end)
+}
+
+# Verifica per le 12:00
+cat("Train set for 12:00 (original):\n")
+dim(train_val_series[[13]]$train)
+dim(train_val_series[[13]]$test)
+
+cat("Train set for 12:00 (dummy):\n")
+dim(train_val_series_dummy[[13]]$train)
+dim(train_val_series_dummy[[13]]$test)
+```
+\
+
+## Without dummies
+
+## Random Forest
+
+```{r}
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Trasformazione logaritmica per stabilizzare la varianza nei dati di allenamento
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Crea il modello Random Forest (o il modello che stai utilizzando)
+  rf_model <- randomForest(X ~ ., data = train_series, importance = TRUE)
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di addestramento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Previsione con il nuovo dataset di allenamento aggiornato
+    z_hatr[h] <- predict(rf_model, newdata = train_data_with_pred_clean[nrow(train_data_with_pred_clean), , drop = FALSE])
+  }
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali sulla scala originale
+  mae_values[i] <- mean(abs(z_hatr - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui sulla scala originale
+  residuals_list[[i]] <- test_series$X - z_hatr
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## XGBoost
+
+```{r}
+# Carica il pacchetto xgboost
+library(xgboost)
+
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Sistemazione dei valori mancanti nelle lag
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Preparazione dei dati per XGBoost
+  train_matrix <- as.matrix(subset(train_series, select = -c(DateTime, Date, X)))
+  train_labels <- train_series$X
+  
+  # Parametri di XGBoost
+  xgb_params <- list(
+    objective = "reg:squarederror",
+    max_depth = 6,
+    eta = 0.1,
+    nthread = 2,
+    verbosity = 0
+  )
+  
+  # Addestramento del modello XGBoost
+  xgb_model <- xgboost(
+    data = train_matrix,
+    label = train_labels,
+    params = xgb_params,
+    nrounds = 100,
+    verbose = FALSE
+  )
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di addestramento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Preparazione del dataset per la previsione
+    pred_matrix <- as.matrix(subset(train_data_with_pred_clean, select = -c(DateTime, Date, X)))
+    
+    # Previsione con il nuovo dataset di allenamento aggiornato
+    z_hatr[h] <- predict(xgb_model, newdata = pred_matrix[nrow(pred_matrix), , drop = FALSE])
+  }
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali
+  mae_values[i] <- mean(abs(z_hatr - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui
+  residuals_list[[i]] <- test_series$X - z_hatr
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## K-Nearest Neighbors (KNN)
+
+```{r}
+# Carica il pacchetto FNN
+library(FNN)
+
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series[[i]]$train
+  test_series <- train_val_series[[i]]$test
+  
+  # Sistemazione dei valori mancanti nelle lag
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Preparazione dei dati per KNN (escludendo colonne non numeriche come DateTime e Date)
+  train_matrix <- as.matrix(subset(train_series, select = -c(DateTime, Date, X)))
+  train_labels <- train_series$X
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di addestramento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Preparazione del dataset per la previsione
+    pred_matrix <- as.matrix(subset(train_data_with_pred_clean, select = -c(DateTime, Date, X)))
+    
+    # Applica il modello KNN per la previsione
+    knn_prediction <- knn.reg(train = train_matrix, test = pred_matrix[nrow(pred_matrix), , drop = FALSE], y = train_labels, k = 5)
+    
+    # Salva la previsione corrente
+    z_hatr[h] <- knn_prediction$pred
+  }
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali
+  mae_values[i] <- mean(abs(z_hatr - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui
+  residuals_list[[i]] <- test_series$X - z_hatr
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## Dummies
+
+## Random Forest
+
+```{r}
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Crea il modello Random Forest (o il modello che stai utilizzando)
+  rf_model <- randomForest(X ~ ., data = train_series, importance = TRUE)
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      IsWeekend = test_series$IsWeekend[h],
+      IsHoliday = test_series$IsHoliday[h],
+      Season = test_series$Season[h],
+      Dec24 = test_series$Dec24[h],
+      Dec25 = test_series$Dec25[h],
+      Dec26 = test_series$Dec26[h],
+      Jan1 = test_series$Jan1[h],
+      Jan6 = test_series$Jan6[h],
+      EasterSat = test_series$EasterSat[h],
+      Easter = test_series$Easter[h],
+      EasterMon = test_series$EasterMon[h],
+      EasterTue = test_series$EasterTue[h],
+      Aug15 = test_series$Aug15[h],
+      EndYear = test_series$EndYear[h],
+      Valentine = test_series$Valentine[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di allenamento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Previsione con il nuovo dataset di allenamento aggiornato
+    z_hatr[h] <- predict(rf_model, newdata = train_data_with_pred_clean[nrow(train_data_with_pred_clean), , drop = FALSE])
+  }
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali
+  mae_values[i] <- mean(abs(z_hatr - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui
+  residuals_list[[i]] <- test_series$X - z_hatr
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+
+## XGBoost
+
+```{r}
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Trasformazione logaritmica per stabilizzare la varianza nei dati di allenamento
+  train_series$X <- log(train_series$X + 1)  # Aggiungi 1 per evitare log(0)
+  train_series$Lag_X <- log(train_series$Lag_X + 1)
+  train_series$Lag_X7 <- log(train_series$Lag_X7 + 1)
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X <- log(train_series$Diff_X + 1)
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7 <- log(train_series$Diff_X7 + 1)
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+
+  # Crea il modello Random Forest (o il modello che stai utilizzando)
+  rf_model <- randomForest(X ~ ., data = train_series, importance = TRUE)
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      IsWeekend = test_series$IsWeekend[h],
+      IsHoliday = test_series$IsHoliday[h],
+      Season = test_series$Season[h],
+      Dec24 = test_series$Dec24[h],
+      Dec25 = test_series$Dec25[h],
+      Dec26 = test_series$Dec26[h],
+      Jan1 = test_series$Jan1[h],
+      Jan6 = test_series$Jan6[h],
+      EasterSat = test_series$EasterSat[h],
+      Easter = test_series$Easter[h],
+      EasterMon = test_series$EasterMon[h],
+      EasterTue = test_series$EasterTue[h],
+      Aug15 = test_series$Aug15[h],
+      EndYear = test_series$EndYear[h],
+      Valentine = test_series$Valentine[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di allenamento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Previsione con il nuovo dataset di allenamento aggiornato
+    z_hatr[h] <- predict(rf_model, newdata = train_data_with_pred_clean[nrow(train_data_with_pred_clean), , drop = FALSE])
+  }
+
+  # Inverso della trasformazione logaritmica per riportare le previsioni alla scala originale
+  z_hatr_original <- exp(z_hatr) - 1  # Inverti il logaritmo (assumendo che la trasformazione sia log(x+1))
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr_original  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali sulla scala originale
+  mae_values[i] <- mean(abs(z_hatr_original - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui sulla scala originale
+  residuals_list[[i]] <- test_series$X - z_hatr_original
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## K-Nearest Neighbors (KNN)
+
+```{r}
+# Carica il pacchetto FNN
+library(FNN)
+
+# Lista per memorizzare i MAE per ogni serie temporale
+mae_values <- numeric(length = 24)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_values_list <- list()
+residuals_list <- list()
+
+# Ciclo per le 24 serie temporali
+for (i in 1:24) {
+  # Prendi la serie temporale di allenamento e test per la serie corrente con le colonne dummy
+  train_series <- train_val_series_dummy[[i]]$train
+  test_series <- train_val_series_dummy[[i]]$test
+  
+  # Sistemazione dei valori mancanti nelle lag
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Converti le colonne categoriali in numeriche (ad esempio, `Season`)
+  train_series$Season <- as.numeric(as.factor(train_series$Season))
+  test_series$Season <- as.numeric(as.factor(test_series$Season))
+  
+  # Preparazione dei dati per KNN (escludendo colonne non numeriche come DateTime e Date)
+  train_matrix <- as.matrix(subset(train_series, select = -c(DateTime, Date, X)))
+  train_labels <- train_series$X
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Crea una nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # La previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      IsWeekend = test_series$IsWeekend[h],
+      IsHoliday = test_series$IsHoliday[h],
+      Season = as.numeric(as.factor(test_series$Season[h])),
+      Dec24 = test_series$Dec24[h],
+      Dec25 = test_series$Dec25[h],
+      Dec26 = test_series$Dec26[h],
+      Jan1 = test_series$Jan1[h],
+      Jan6 = test_series$Jan6[h],
+      EasterSat = test_series$EasterSat[h],
+      Easter = test_series$Easter[h],
+      EasterMon = test_series$EasterMon[h],
+      EasterTue = test_series$EasterTue[h],
+      Aug15 = test_series$Aug15[h],
+      EndYear = test_series$EndYear[h],
+      Valentine = test_series$Valentine[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di addestramento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Preparazione del dataset per la previsione
+    pred_matrix <- as.matrix(subset(train_data_with_pred_clean, select = -c(DateTime, Date, X)))
+    
+    # Applica il modello KNN per la previsione
+    knn_prediction <- knn.reg(train = train_matrix, test = pred_matrix[nrow(pred_matrix), , drop = FALSE], y = train_labels, k = 5)
+    
+    # Salva la previsione corrente
+    z_hatr[h] <- knn_prediction$pred
+  }
+
+  # Salva i valori di training e previsione nella lista
+  test_values_list[[i]] <- test_series$X  # Salva la serie di allenamento
+  forecast_values_list[[i]] <- z_hatr  # Salva le previsioni
+
+  # Calcola MAE tra le previsioni e i valori reali
+  mae_values[i] <- mean(abs(z_hatr - test_series$X), na.rm = TRUE)
+  
+  # Calcola i residui
+  residuals_list[[i]] <- test_series$X - z_hatr
+}
+
+# Media dei MAE di tutte le serie
+mae <- mean(mae_values)
+
+# Visualizza i risultati
+cat("MAE values per series:\n")
+print(mae_values)
+cat("MAE: ", mae, "\n")
+```
+\
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Combina i residui in un unico data frame
+residuals_df <- do.call(cbind, residuals_list)
+colnames(residuals_df) <- paste0("Series_", 1:24)
+residuals_df <- data.frame(Time = seq_len(nrow(residuals_df)), residuals_df)
+residuals_long <- melt(residuals_df, id.vars = "Time", variable.name = "Series", value.name = "Residual")
+
+# Crea il grafico con ggplot2
+ggplot(residuals_long, aes(x = Time, y = Residual)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ Series, scales = "free_y", ncol = 4) +
+  theme_minimal() +
+  labs(title = "Residuals per Series", x = "Time", y = "Residuals")
+```
+\
+```{r acf-classic-residuals, fig.width=14, fig.height=10}
+# Organizza i grafici ACF classici in una griglia 4x6
+par(mfrow = c(4, 6), mar = c(3, 3, 3, 1))  # layout grafico
+
+for (i in 1:24) {
+  res <- residuals_list[[i]]
+  if (is.numeric(res)) {
+    acf(na.omit(res), lag.max = 25, main = paste("ACF - Residuals Serie", i))
+  }
+}
+```
+\
+```{r}
+# Numero di serie temporali e lunghezza di ogni serie
+num_series <- length(forecast_values_list)
+series_length <- length(forecast_values_list[[1]])
+
+# Inizializza vettori per le previsioni e i dati di test combinati
+combined_forecasts <- numeric(series_length * num_series)
+combined_test <- numeric(series_length * num_series)
+
+# Ricostruisci le serie temporali combinate ordinando i dati correttamente
+for (t in 1:series_length) {
+  for (i in 1:num_series) {
+    index <- (t - 1) * num_series + i
+    combined_forecasts[index] <- forecast_values_list[[i]][t]
+    combined_test[index] <- train_val_series[[i]]$test$X[t]
+  }
+}
+
+# Ottieni i valori di start_date e frequency dalla prima serie di test
+start_date <- start(train_val_series[[1]]$test$X)  # Data di inizio della prima serie test
+frequency <- frequency(train_val_series[[1]]$test$X)  # Frequenza della serie (e.g., giornaliera)
+
+# Convertili in oggetti di serie temporali
+forecast_ts <- ts(combined_forecasts, start = start_date, frequency = frequency)
+test_ts <- ts(combined_test, start = start_date, frequency = frequency)
+
+# Grafico delle serie temporali
+plot(test_ts, col = "skyblue", lwd = 2, ylim = range(c(test_ts, forecast_ts)), 
+     main = "Forecasts vs Validation Set", ylab = "Valore", xlab = "Tempo")
+lines(forecast_ts, col = "green", lwd = 1)  # Linea rossa continua per le previsioni
+legend("topright", legend = c("Validation Set", "Forecasts"),
+       col = c("skyblue", "green"), lty = c(1, 1), lwd = 2)  # Linee continue nella legenda
+```
+\
+
+## Deployment final model
+
+```{r}
+# Carica il pacchetto necessario
+library(FNN)
+
+# Liste per memorizzare i valori di training, forecast e residui
+test_values_list <- list()
+forecast_results_KNN <- list()  # Lista per le previsioni
+residuals_list <- list()  # Lista per i residui
+
+# Loop per le 24 serie temporali
+for (i in 1:24) {
+  print(paste("Processing series:", i))
+  
+  # Prendi la serie temporale di allenamento e test per la serie corrente
+  train_series <- train_test_series_dummy[[i]]$train
+  test_series <- train_test_series_dummy[[i]]$test
+  
+  # Sistemazione dei valori mancanti nelle lag
+  train_series$Lag_X7[1] <- train_series$Lag_X7[2]
+  train_series$Diff_X[1] <- train_series$Diff_X[2]
+  train_series$Diff_X7[1] <- train_series$Diff_X7[2]
+  
+  # Converti colonne categoriali in numeriche (ad esempio `Season`)
+  train_series$Season <- as.numeric(as.factor(train_series$Season))
+  test_series$Season <- as.numeric(as.factor(test_series$Season))
+  
+  # Preparazione dei dati per KNN (escludendo colonne non numeriche come DateTime e Date)
+  train_matrix <- as.matrix(subset(train_series, select = -c(DateTime, Date, X)))
+  train_labels <- train_series$X
+  
+  # Inizializza il vettore per le previsioni rolling
+  z_hatr <- numeric(nrow(test_series))
+  
+  for (h in 1:nrow(test_series)) {
+    # Prepara la nuova riga con la previsione corrente
+    new_row <- data.frame(
+      DateTime = test_series$DateTime[h],
+      Date = as.character(test_series$Date[h]),
+      Hour = test_series$Hour[h],
+      X = z_hatr[h],  # Previsione corrente
+      Lag_X = ifelse(h > 1, z_hatr[h-1], NA),
+      Lag_X7 = ifelse(h > 7, z_hatr[h-7], NA),
+      Diff_X = ifelse(h > 1, z_hatr[h] - z_hatr[h-1], NA),
+      Diff_X7 = ifelse(h > 7, z_hatr[h] - z_hatr[h-7], NA),
+      DayOfWeek = test_series$DayOfWeek[h],
+      DayOfYear = test_series$DayOfYear[h],
+      IsWeekend = test_series$IsWeekend[h],
+      IsHoliday = test_series$IsHoliday[h],
+      Season = test_series$Season[h],
+      Dec24 = test_series$Dec24[h],
+      Dec25 = test_series$Dec25[h],
+      Dec26 = test_series$Dec26[h],
+      Jan1 = test_series$Jan1[h],
+      Jan6 = test_series$Jan6[h],
+      EasterSat = test_series$EasterSat[h],
+      Easter = test_series$Easter[h],
+      EasterMon = test_series$EasterMon[h],
+      EasterTue = test_series$EasterTue[h],
+      Aug15 = test_series$Aug15[h],
+      EndYear = test_series$EndYear[h],
+      Valentine = test_series$Valentine[h],
+      stringsAsFactors = FALSE
+    )
+    
+    # Aggiungi la nuova riga al dataset di allenamento
+    train_data_with_pred <- rbind(train_series, new_row)
+    
+    # Rimuovi eventuali righe con NA
+    train_data_with_pred_clean <- na.omit(train_data_with_pred)
+    
+    # Preparazione del dataset per la previsione
+    pred_matrix <- as.matrix(subset(train_data_with_pred_clean, select = -c(DateTime, Date, X)))
+    
+    # Applica il modello KNN per la previsione
+    knn_prediction <- knn.reg(
+      train = train_matrix,
+      test = pred_matrix[nrow(pred_matrix), , drop = FALSE],
+      y = train_labels,
+      k = 5
+    )
+    
+    # Salva la previsione corrente
+    z_hatr[h] <- knn_prediction$pred
+  }
+  
+  # Salva i valori di test e previsioni nella lista
+  test_values_list[[i]] <- test_series$X
+  forecast_results_KNN[[i]] <- z_hatr
+}
+
+# Riepilogo delle previsioni completate
+cat("Previsioni completate per tutte le serie temporali con KNN.\n")
+```
+\
+```{r}
+forecast_results_KNN[[1]][1:4]
+```
+\
+```{r}
+forecast_results_KNN[[2]][1:4]
+```
+\
+```{r}
+forecast_results_KNN[[3]][1:4]
+```
+\
+```{r}
+# Creazione della base DateTime
+start_date <- as.POSIXct("2016-12-01 00:00:00")
+num_days <- length(forecast_results_KNN[[1]])  # Numero di giorni previsti
+hourly_series_length <- num_days * 24  # Numero totale di ore
+
+# Genera il vettore DateTime per ogni ora
+datetime_vector <- seq(start_date, by = "hour", length.out = hourly_series_length)
+
+# Inizializza un vettore per salvare tutte le previsioni
+forecast_vector_KNN <- numeric(hourly_series_length)
+
+# Ricomponi la serie oraria
+for (i in 1:24) {
+  # Inserisci le previsioni nella posizione corretta
+  forecast_vector_KNN[seq(i, hourly_series_length, by = 24)] <- forecast_results_KNN[[i]]
+}
+
+# Creazione del data frame finale
+forecast_dataframe <- data.frame(
+  DateTime = datetime_vector,
+  ARIMA = forecast_vector_ARIMA,
+  UCM = forecast_vector_UCM,
+  ML = forecast_vector_KNN
+)
+
+# Visualizza le prime righe del risultato
+head(forecast_dataframe)
+```
+\
+```{r}
+dim(forecast_dataframe)
+```
+\
+```{r}
+library(ggplot2)
+
+# Filtra la serie originale per sovrapporre solo fino all'ultima osservazione reale
+ts_train_df <- subset(ts_cutted_filled_df, Date < as.POSIXct("2016-12-01 00:00:00"))
+
+# Combina i dati di training e le previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$ML
+)
+
+# Plot con ggplot2
+ggplot() +
+  # Serie originale (parte di training)
+  geom_line(data = ts_train_df, aes(x = Date, y = Value), color = "skyblue", size = 0.8, alpha = 0.7) +
+  # Previsioni
+  geom_line(data = forecast_df, aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Serie Originale vs Previsioni",
+       x = "DateTime", y = "Valore") +
+  theme_minimal()
+```
+\
+```{r}
+library(ggplot2)
+
+# Combina i dati delle previsioni
+forecast_df <- data.frame(
+  DateTime = forecast_dataframe$DateTime,
+  Forecast = forecast_dataframe$ML
+)
+
+# Plot con ggplot2: solo previsioni
+ggplot(data = forecast_df) +
+  # Previsioni
+  geom_line(aes(x = DateTime, y = Forecast), color = "green", size = 0.8, alpha = 0.7) +
+  # Personalizzazione
+  labs(title = "Previsioni con ML",
+       x = "DateTime", y = "Valore Previsione") +
+  theme_minimal()
+```
+\
+```{r}
+# Specifica il percorso e il nome del file CSV
+file_path <- "forecast_dataframe.csv"
+
+# Salva il data frame come CSV
+write.csv(forecast_dataframe, file = file_path, row.names = FALSE)
+
+# Conferma il salvataggio
+cat("Il file è stato salvato in:", file_path, "\n")
+```
+
