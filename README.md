@@ -302,3 +302,9 @@ Possible extensions of the project:
 This project demonstrates that classical statistical forecasting techniques remain highly effective for structured seasonal traffic time series.
 
 Among all evaluated approaches, the Unobserved Components Model (UCM) achieved the best overall forecasting performance and interpretability, making it the most suitable candidate for deployment in real-world traffic prediction systems.
+
+---
+
+# License
+
+This repository is intended for academic and educational purposes only.
